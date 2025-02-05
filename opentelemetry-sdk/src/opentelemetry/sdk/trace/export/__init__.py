@@ -525,7 +525,6 @@ class ConsoleSpanExporter(SpanExporter):
         return True
 
 
-# TODO add heartbeat when exporting spans
 class PartialSpanProcessor(SpanProcessor):
     """Partial span processor implementation.
 
@@ -594,18 +593,14 @@ class PartialSpanProcessor(SpanProcessor):
         if hasattr(os, "register_at_fork"):
             os.register_at_fork(after_in_child=self._at_fork_reinit)  # pylint: disable=protected-access
         self._pid = os.getpid()
+        self.active_spans = {}
 
     def on_start(
         self, span: Span, parent_context: typing.Optional[Context] = None
     ) -> None:
-        attributes = {
-            "partial.event": "heartbeat",
-            "partial.frequency": str(self._default_schedule_delay_millis())
-            + "ms",
-            # TODO should this be removed?
-            "telemetry.logs.cluster": "partial",
-            "telemetry.logs.project": "span",
-        }
+        span_key = (span.context.trace_id, span.context.span_id)
+        self.active_spans[span_key] = span
+        attributes = self.get_heartbeat_attributes()
 
         log_data = self.get_logdata(span, attributes)
         self.log_processor.emit(log_data)
@@ -627,6 +622,10 @@ class PartialSpanProcessor(SpanProcessor):
         return log_data
 
     def on_end(self, span: ReadableSpan) -> None:
+        span_key = (span.context.trace_id, span.context.span_id)
+        if span_key in self.active_spans:
+            del self.active_spans[span_key]
+
         attributes = {
             "partial.event": "stop",
             # TODO should this be removed?
@@ -668,6 +667,23 @@ class PartialSpanProcessor(SpanProcessor):
         self.worker_thread.start()
         self._pid = os.getpid()
 
+    def heartbeat(self):
+        attributes = self.get_heartbeat_attributes()
+
+        for span_key, span in self.active_spans.items():
+            log_data = self.get_logdata(span, attributes)
+            self.log_processor.emit(log_data)
+
+    def get_heartbeat_attributes(self):
+        return {
+            "partial.event": "heartbeat",
+            "partial.frequency": str(self._default_schedule_delay_millis())
+            + "ms",
+            # TODO should this be removed?
+            "telemetry.logs.cluster": "partial",
+            "telemetry.logs.project": "span",
+        }
+
     def worker(self):
         timeout = self.schedule_delay_millis / 1e3
         flush_request = None  # type: typing.Optional[_FlushRequest]
@@ -682,6 +698,7 @@ class PartialSpanProcessor(SpanProcessor):
                     and flush_request is None
                 ):
                     self.condition.wait(timeout)
+                    self.heartbeat()
                     flush_request = self._get_and_unset_flush_request()
                     if not self.queue:
                         # spurious notification, let's wait again, reset timeout

@@ -265,13 +265,6 @@ class LogData:
         self.log_record = log_record
         self.instrumentation_scope = instrumentation_scope
 
-    # TODO remove this
-    def to_dict(self):
-        return {
-            "log_record": self.log_record.to_json(),
-            "instrumentation_scope": self.instrumentation_scope,
-        }
-
 
 class LogRecordProcessor(abc.ABC):
     """Interface to hook the log record emitting action.
