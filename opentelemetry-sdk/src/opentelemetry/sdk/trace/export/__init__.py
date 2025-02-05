@@ -602,24 +602,8 @@ class PartialSpanProcessor(SpanProcessor):
         self.active_spans[span_key] = span
         attributes = self.get_heartbeat_attributes()
 
-        log_data = self.get_logdata(span, attributes)
+        log_data = get_logdata(span, attributes)
         self.log_processor.emit(log_data)
-
-    def get_logdata(self, span, attributes):
-        span_context = Span.get_span_context(span)
-        log_record = LogRecord(
-            timestamp=time.time_ns(),
-            observed_timestamp=time.time_ns(),
-            trace_id=span_context.trace_id,
-            span_id=span_context.span_id,
-            trace_flags=TraceFlags().get_default(),
-            severity_text="INFO",
-            severity_number=SeverityNumber.INFO,
-            body=span.to_json(),
-            attributes=attributes,
-        )
-        log_data = LogData(log_record=log_record, instrumentation_scope=None)
-        return log_data
 
     def on_end(self, span: ReadableSpan) -> None:
         span_key = (span.context.trace_id, span.context.span_id)
@@ -633,7 +617,7 @@ class PartialSpanProcessor(SpanProcessor):
             "telemetry.logs.project": "span",
         }
 
-        log_data = self.get_logdata(span, attributes)
+        log_data = get_logdata(span, attributes)
         self.log_processor.emit(log_data)
 
         if self.done:
@@ -670,8 +654,8 @@ class PartialSpanProcessor(SpanProcessor):
     def heartbeat(self):
         attributes = self.get_heartbeat_attributes()
 
-        for span_key, span in self.active_spans.items():
-            log_data = self.get_logdata(span, attributes)
+        for span in self.active_spans.items():
+            log_data = get_logdata(span, attributes)
             self.log_processor.emit(log_data)
 
     def get_heartbeat_attributes(self):
@@ -930,3 +914,20 @@ class PartialSpanProcessor(SpanProcessor):
             raise ValueError(
                 "max_export_batch_size must be less than or equal to max_queue_size."
             )
+
+
+def get_logdata(span, attributes):
+    span_context = Span.get_span_context(span)
+    log_record = LogRecord(
+        timestamp=time.time_ns(),
+        observed_timestamp=time.time_ns(),
+        trace_id=span_context.trace_id,
+        span_id=span_context.span_id,
+        trace_flags=TraceFlags().get_default(),
+        severity_text="INFO",
+        severity_number=SeverityNumber.INFO,
+        body=span.to_json(),
+        attributes=attributes,
+    )
+    log_data = LogData(log_record=log_record, instrumentation_scope=None)
+    return log_data
