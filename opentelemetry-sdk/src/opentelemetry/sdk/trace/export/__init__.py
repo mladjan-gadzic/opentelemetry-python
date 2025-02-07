@@ -15,6 +15,7 @@
 import collections
 import logging
 import os
+import queue
 import sys
 import threading
 import time
@@ -550,6 +551,7 @@ class PartialSpanProcessor(SpanProcessor):
         export_timeout_millis: float = None,
     ):
         self.log_processor = log_processor
+        self.lock = threading.Lock()
 
         if max_queue_size is None:
             max_queue_size = PartialSpanProcessor._default_max_queue_size()
@@ -594,12 +596,14 @@ class PartialSpanProcessor(SpanProcessor):
             os.register_at_fork(after_in_child=self._at_fork_reinit)  # pylint: disable=protected-access
         self._pid = os.getpid()
         self.active_spans = {}
+        self.ended_spans = queue.Queue()
 
     def on_start(
         self, span: Span, parent_context: typing.Optional[Context] = None
     ) -> None:
         span_key = (span.context.trace_id, span.context.span_id)
-        self.active_spans[span_key] = span
+        with self.lock:
+            self.active_spans[span_key] = span
         attributes = self.get_heartbeat_attributes()
 
         log_data = get_logdata(span, attributes)
@@ -607,8 +611,7 @@ class PartialSpanProcessor(SpanProcessor):
 
     def on_end(self, span: ReadableSpan) -> None:
         span_key = (span.context.trace_id, span.context.span_id)
-        if span_key in self.active_spans:
-            del self.active_spans[span_key]
+        self.ended_spans.put((span_key, span))
 
         attributes = {
             "partial.event": "stop",
@@ -652,11 +655,18 @@ class PartialSpanProcessor(SpanProcessor):
         self._pid = os.getpid()
 
     def heartbeat(self):
+        # remove ended spans from active spans
+        with self.lock:
+            while not self.ended_spans.empty():
+                span_key, span = self.ended_spans.get()
+                self.active_spans.pop(span_key, None)
+
         attributes = self.get_heartbeat_attributes()
 
-        for span in self.active_spans.items():
-            log_data = get_logdata(span, attributes)
-            self.log_processor.emit(log_data)
+        with self.lock:
+            for span_key, span in self.active_spans.items():
+                log_data = get_logdata(span, attributes)
+                self.log_processor.emit(log_data)
 
     def get_heartbeat_attributes(self):
         return {
