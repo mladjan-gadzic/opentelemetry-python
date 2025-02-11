@@ -33,6 +33,8 @@ from opentelemetry.context import (
     detach,
     set_value,
 )
+from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+from opentelemetry.proto.trace.v1 import trace_pb2
 from opentelemetry.sdk._logs import LogData, LogRecord, LogRecordProcessor
 from opentelemetry.sdk.environment_variables import (
     OTEL_BSP_EXPORT_TIMEOUT,
@@ -928,6 +930,12 @@ class PartialSpanProcessor(SpanProcessor):
 
 def get_logdata(span, attributes):
     span_context = Span.get_span_context(span)
+
+    enc_spans = encode_spans([span]).resource_spans
+    traces_data = trace_pb2.TracesData()
+    traces_data.resource_spans.extend(enc_spans)
+    serialized_traces_data = traces_data.SerializeToString()
+
     log_record = LogRecord(
         timestamp=time.time_ns(),
         observed_timestamp=time.time_ns(),
@@ -936,8 +944,10 @@ def get_logdata(span, attributes):
         trace_flags=TraceFlags().get_default(),
         severity_text="INFO",
         severity_number=SeverityNumber.INFO,
-        body=span.to_json(),
+        body=bytes(serialized_traces_data),
         attributes=attributes,
     )
-    log_data = LogData(log_record=log_record, instrumentation_scope=None)
+    log_data = LogData(
+        log_record=log_record, instrumentation_scope=span.instrumentation_scope
+    )
     return log_data
